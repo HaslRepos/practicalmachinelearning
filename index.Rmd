@@ -9,22 +9,140 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+&nbsp;  
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+##Summary
+This study investigates data about personal activity tracked by devices such as Jawbone Up, Nike FuelBand and Fitbit. It is based on the Weight Lifting Exercises within the Human Activity Recognition Project (see: http://groupware.les.inf.puc-rio.br/har), where "Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E)."  
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+We build a model to predict the manner in which the participants did the exercise making use of the data coming from the different sensors on the belt, forearm, arm and dumbbell.  
 
-```{r cars}
-summary(cars)
+&nbsp;  
+
+##Data Preprocessing and Loading  
+
+There are two datasets provided for the Practical Machine Learning Project.  
+Training data: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  
+Test data    : https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv  
+
+```{r message=FALSE}
+library(caret)
 ```
 
-## Including Plots
+First we retrieve the data files and load the data into corresponding data frames.  
 
-You can also embed plots, for example:
+```{r message=FALSE}
+if (!file.exists("./pml-training.csv")) {
+     fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+     download.file(fileUrl, destfile = "./pml-training.csv", method="curl")
+     if (!file.exists("./pml-training.csv")) {
+          stop("'pml-training.csv' not available!")
+     }
+}
+if (!file.exists("./pml-testing.csv")) {
+     fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+     download.file(fileUrl, destfile = "./pml-testing.csv", method="curl")
+     if (!file.exists("./pml-testing.csv")) {
+          stop("'pml-testing.csv' not available!")
+     }
+}
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+train <- read.csv("pml-training.csv", header=TRUE)
+validation <- read.csv("pml-testing.csv", header=TRUE)
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+The pml-testing dataset is been used for validation only. The prediction model is been built on the pml-training dataset. In order to fit the model and perform an out-of-sample test we split the training dataset into a training and testing partition.  
+
+```{r}
+trainIndex <- createDataPartition(train$classe, p = 0.7, list = FALSE)
+training <- train[trainIndex, ]
+testing  <- train[-trainIndex, ]
+```
+
+```{r}
+dim(training)
+```
+
+There are `r nrow(training)` rows and `r ncol(training)` variables in the training set. Many of them contain missing data.  
+
+```{r}
+head(colSums(is.na(training[, colSums(is.na(training)) > 0])),10)
+```
+
+Imputing is not a solution in these cases, since the majority of the data is missing (more than 95 %). We are going to remove these variables from further analysis and model building.   
+
+```{r}
+training <- training[, colSums(is.na(training)) == 0]
+dim(training)
+```
+
+There is another set of variables in the dataset with very low variance that aren't helpful within a prediction model. We identify them using the nearZeroVar function and remove them from the training set.  
+
+```{r}
+nzvCols <- nearZeroVar(training)
+if(length(nzvCols) > 0) training <- training[, -nzvCols]
+dim(training)
+```
+
+The first six variables in the training dataset contains information that is not useful for prediction modelling, such as timestamps and names. Therefore we also remove them from the dataset.  
+
+```{r}
+training <- training[,-(1:6)]
+dim(training)
+```
+
+The final dataset for model training consits of `r ncol(training)-1` predictors and the outcome "classe".  
+
+&nbsp;  
+
+##Model Building
+
+We use random forest as our model of choice. Random forest is one of the most accurate learning algorithms available. It provides etimates of important variables as well as an unbiased estimate of the generalization error during the forest building process.  
+
+### Model Fit
+
+We fit the model on the training dataset using 10 fold cross-validation, although there are some discussions around, whether random forest requires cross-validation or not (see Leo Breiman and Adele Cutler: Random Forests).  
+
+```{r cachedChunk, cache=TRUE, message=FALSE}
+set.seed(8872)
+rfCvFit  <- train(classe ~ ., data = training, method = "rf", importance = TRUE, trControl = trainControl(method="cv", number = 10, verboseIter = FALSE))
+```
+
+###Model Evaluation
+
+With the fitted model we can now run an evaluation on the testing partition, that we split from the testing dataset. This will provide us information on the efficiency (accuracy) and the out-of-sample error of our model fit.  
+
+```{r message=FALSE}
+rfCvPred <- predict(rfCvFit, newdata=testing)
+rfCvCM <- confusionMatrix(rfCvPred, testing$classe)
+rfCvCM
+```
+
+The **accuracy** of our model is `r round(rfCvCM$overall['Accuracy']*100,2)` % with an **out-of-sample error** of `r round((1 - rfCvCM$overall['Accuracy']) * 100,2)` %.  
+For our model we did not change the default number of trees of 500. We can see the error rate goes down as the number of trees increases.  
+
+```{r}
+plot(rfCvFit$finalModel, main = "Error Rate vs Number of Trees")
+```
+
+We can see the most important predictors identified in the model.  
+
+```{r}
+varImpPlot(rfCvFit$finalModel, n.var = 10, main = "Variable Importance - Top 10 Predictors")
+```
+
+&nbsp;  
+
+##Predict test cases
+
+Finally we apply our machine learning algorithm to the 20 test cases available in the validation dataset.  
+
+```{r}
+rfPredTest <- predict(rfCvFit, newdata=validation)
+print((data.frame(id=validation$problem_id, prediction=rfPredTest)))
+```
+
+&nbsp;  
+
+##Conclusion
+
+Our model based on random forest provided an accurate prediction on the training dataset available. Since there was only data from six participants in the project dataset, the generalization of the model still needs to be proven.   
